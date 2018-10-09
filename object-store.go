@@ -103,15 +103,19 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*Media
 // Insert saves a new Media object. If this objects Key is the same as an existing object it will
 // replace it if its timestamp is newer, if this new object is older it will drop it.
 func (mi *MediaInfo) Insert(ctx context.Context, string key, object []byte) {
-  os.mutex.Lock()
-  defer os.mutex.Unlock()
-	i, ok := mi.index[key]
+  {
+    os.mutex.Lock()
+    defer os.mutex.Unlock()
+    
+    timestamp = 0 // TODO: Get the timestamp
+	  i, ok := mi.index[key]
 	if ok {
 		mi.data.Media[i] = media
 	} else {
 		mi.index[key] = len(mi.data.Media)
 		mi.data.Media = append(mi.data.Media, media)
 	}
+  }
 
   if err := mi.saveOne(ctx, client, media); err != nil {
 		log.Fatalf("Failed to write: %v", err)
@@ -120,31 +124,21 @@ func (mi *MediaInfo) Insert(ctx context.Context, string key, object []byte) {
 
 // DeleteFast deletes a referenced Media object but doesn't save. To save you need to call Flush.
 func (mi *MediaInfo) Delete(key [32]byte) {
-  os.mutex.Lock()
-  defer os.mutex.Unlock()
-	i, ok := mi.index[key]
-	if !ok {
-		return
-	}
-
-	delete(mi.index, key)
-	mi.data.Media[i] = mi.data.Media[len(mi.data.Media)-1]
-	mi.index[util.Sha256(mi.data.Media[i].Key)] = i
-	mi.data.Media = mi.data.Media[:len(mi.data.Media)-1]
+  Insert(ctx, key, nil)
 }
 
-func (mi *MediaInfo) Get(key [32]byte) *message.Media {
+func (mi *MediaInfo) Get(key [32]byte) *[]byte {
   os.mutex.RLock()
   defer os.mutex.RUnlock()
-	var rv message.Media
 	i, ok := mi.index[key]
 	if !ok {
 		return nil
 	}
-	proto.Merge(&rv, mi.data.Media[i])
-	return &rv
+
+	return i
 }
 
+// How to deal with this when we use locks? ...
 func (mi *MediaInfo) All() []*message.Media {
 	return mi.data.Media
 }
@@ -170,11 +164,16 @@ func load(ctx context.Context, client *storage.Client, bucketName, filename stri
 	return nil
 }
 
-func (mi *MediaInfo) save(ctx context.Context, client *storage.Client, bucketName, filename string, p proto.Message) error {
+func (os *ObjectStore) save(ctx context.Context, filename string, p proto.Message) error {
 	data, err := proto.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("marshalling proto: %v", err)
 	}
+  
+  if filename == "" {
+    	shasum := sha256.Sum256(data)
+	filename := fmt.Sprintf("%s.os", hex.EncodeToString(shasum[:]))
+  }
 
 	wc := client.Bucket(bucketName).Object(filename).NewWriter(ctx)
 	checksum := md5.Sum(data)
@@ -185,45 +184,5 @@ func (mi *MediaInfo) save(ctx context.Context, client *storage.Client, bucketNam
 	if err := wc.Close(); err != nil {
 		return fmt.Errorf("closing file: %v", err)
 	}
-	return nil
-}
-
-func (mi *MediaInfo) saveAll(ctx context.Context, client *storage.Client) error {
-	if err := mi.save(ctx, client, mi.bucketName, masterFileName, &mi.data); err != nil {
-		return fmt.Errorf("saving proto: %v", err)
-	}
-
-	for i, _ := range mi.files {
-		mi.wait.Add(1)
-		filename := mi.files[i]
-		go func() {
-			err := client.Bucket(mi.bucketName).Object(filename).Delete(ctx)
-			if err != nil {
-				// This seems to fail sometimes, but still deletes...
-				// At any rate we don't really care.
-				// log.Printf("Failed to delete: %v", err)
-			}
-			mi.wait.Done()
-		}()
-	}
-	mi.files = []string{}
-
-	return nil
-}
-
-func (mi *MediaInfo) saveOne(ctx context.Context, client *storage.Client, m *message.Media) error {
-	data, err := proto.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("marshalling proto: %v", err)
-	}
-
-	shasum := sha256.Sum256(data)
-	filename := fmt.Sprintf("%s.md", hex.EncodeToString(shasum[:]))
-
-	if err := mi.save(ctx, client, mi.bucketName, filename, m); err != nil {
-		return fmt.Errorf("saving proto: %v", err)
-	}
-
-	mi.files = append(mi.files, filename)
 	return nil
 }
