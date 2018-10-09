@@ -22,12 +22,6 @@ const (
 	masterFileName = "master.md"
 )
 
-type object struct {
-	wg   sync.WaitGroup
-	key  string
-	data []byte
-}
-
 type objectStore struct {
 	client *storage.Client
 
@@ -52,18 +46,9 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*objec
 
 	t := time.Now().UnixNano()
 	log.Printf("Reading objectStore: %s", bucketName)
-	if err := os.load(ctx, masterFileName, os.data); err != nil {
-		if err != storage.ErrObjectNotExist {
-			return nil, fmt.Errorf("loading masterfile: (%s) %v", bucketName, err)
-		}
-	}
 
-	for i, m := range os.data.Item {
-		os.index[m.Key] = i
-	}
-
-	ch := make(chan *object)
 	var wg sync.WaitGroup
+	ch := make(chan *schema.ObjectSet)
 
 	bucket := client.Bucket(bucketName)
 	for it := bucket.Objects(ctx, nil); ; {
@@ -74,16 +59,12 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*objec
 			}
 			log.Fatalf("Failed to iterate through objects: %v", err)
 		}
-		if obj.Name == masterFileName {
-			continue
-		}
 
-		os.files = append(os.files, obj.Name)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			var tmp schema.ObjectSet
-			err := os.load(ctx, obj.Name, tmp)
+			err := os.load(ctx, obj.Name, &tmp)
 			if err != nil {
 				log.Fatalf("Failed to load: %v (%v)", err, obj.Name)
 			}
@@ -96,12 +77,17 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*objec
 		close(ch)
 	}()
 
-	for m := range ch {
-		os.insertInternal(ctx, client, m, false)
+	for obj := range ch {
+		for _, o := range obj.Item {
+			// Fix, we don't need the lock in this case.
+			os.addToData(o)
+		}
 	}
-	os.saveAll(ctx, client)
+
+	// os.saveAll(ctx, client)
+
 	log.Printf("Read %d Media objects, took %v seconds",
-		len(os.All()), float64(time.Now().UnixNano()-t)/1000000000.0)
+		len(os.data.Item), float64(time.Now().UnixNano()-t)/1000000000.0)
 	return &os, nil
 }
 
@@ -110,28 +96,31 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*objec
 func (os *objectStore) Insert(ctx context.Context, key string, object []byte) {
 	var obj schema.Object
 	obj.Key = key
+	obj.TimestampNanoSeconds = time.Now().UnixNano()
 	obj.Object = object
 
-	{
-		os.mutex.Lock()
-		defer os.mutex.Unlock()
-
-		// We wait until we have the lock to set the timestamp.
-		obj.TimestampNanoSeconds = time.Now().UnixNano()
-
-		i, ok := os.index[key]
-		if ok {
-			os.data.Item[i] = &obj
-		} else {
-			os.index[key] = len(os.data.Item)
-			os.data.Item = append(os.data.Item, &obj)
-		}
-	}
+	os.addToData(&obj)
 
 	var tmp schema.ObjectSet
 	tmp.Item = append(tmp.Item, &obj)
 	if err := os.save(ctx, "", &tmp); err != nil {
 		log.Fatalf("Failed to write: %v", err)
+	}
+}
+
+// addToData takes the write lock and adds this schema.Object to the data and index.
+func (os *objectStore) addToData(obj *schema.Object) {
+	os.mutex.Lock()
+	defer os.mutex.Unlock()
+
+	i, ok := os.index[obj.Key]
+	if ok {
+		if obj.TimestampNanoSeconds > os.data.Item[i].TimestampNanoSeconds {
+			os.data.Item[i] = obj
+		}
+	} else {
+		os.index[obj.Key] = len(os.data.Item)
+		os.data.Item = append(os.data.Item, obj)
 	}
 }
 
