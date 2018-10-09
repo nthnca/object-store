@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package schema;
+
+message ObjectSet {
+  repeated Object item = 1;
+}
+
+message Object {
+  string key = 1;
+  int64 timestamp_nano_seconds = 2;
+  bytes object = 3;
+}

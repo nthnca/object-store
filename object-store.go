@@ -1,4 +1,4 @@
-// Package mediainfo.
+// Package objectStore.
 package objectstore
 
 import (
@@ -14,8 +14,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/golang/protobuf/proto"
-	"github.com/nthnca/curator/pkg/mediainfo/message"
-	"github.com/nthnca/curator/pkg/util"
+	"github.com/nthnca/object-store/schema"
 	"google.golang.org/api/iterator"
 )
 
@@ -23,41 +22,47 @@ const (
 	masterFileName = "master.md"
 )
 
-type MediaInfo struct {
-  client *storage.Client
-  
-	bucketName string
-  filePrefix string
-  
-  mutex RWMutex
-	data       message.MediaSet
-	index      map[[32]byte]int
-
-  // List of temporary files that can be deleted after the next full write.
-  tmpFiles      []string
+type object struct {
+	wg   sync.WaitGroup
+	key  string
+	data []byte
 }
 
-// New will load the Media objects from the given bucket and return a MediaInfo object
+type objectStore struct {
+	client *storage.Client
+
+	bucketName string
+	filePrefix string
+
+	mutex sync.RWMutex
+	data  schema.ObjectSet
+	index map[string]int
+
+	// List of temporary files that can be deleted after the next full write.
+	files []string
+}
+
+// New will load the Media objects from the given bucket and return a objectStore object
 // that will allow you to continue to add Media objects to this bucket.
-func New(ctx context.Context, client *storage.Client, bucketName string) (*MediaInfo, error) {
-	var mi MediaInfo
-  os.client = client
-	mi.bucketName = bucketName
-	mi.index = make(map[[32]byte]int)
+func New(ctx context.Context, client *storage.Client, bucketName string) (*objectStore, error) {
+	var os objectStore
+	os.client = client
+	os.bucketName = bucketName
+	os.index = make(map[string]int)
 
 	t := time.Now().UnixNano()
-	log.Printf("Reading MediaInfo: %s", bucketName)
-	if err := load(ctx, client, bucketName, masterFileName, &mi.data); err != nil {
+	log.Printf("Reading objectStore: %s", bucketName)
+	if err := os.load(ctx, masterFileName, os.data); err != nil {
 		if err != storage.ErrObjectNotExist {
 			return nil, fmt.Errorf("loading masterfile: (%s) %v", bucketName, err)
 		}
 	}
 
-	for i, m := range mi.data.Media {
-		mi.index[util.Sha256(m.Key)] = i
+	for i, m := range os.data.Item {
+		os.index[m.Key] = i
 	}
 
-	ch := make(chan *message.Media)
+	ch := make(chan *object)
 	var wg sync.WaitGroup
 
 	bucket := client.Bucket(bucketName)
@@ -73,12 +78,12 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*Media
 			continue
 		}
 
-		mi.files = append(mi.files, obj.Name)
+		os.files = append(os.files, obj.Name)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			var tmp message.Media
-			err := load(ctx, client, bucketName, obj.Name, &tmp)
+			var tmp schema.ObjectSet
+			err := os.load(ctx, obj.Name, tmp)
 			if err != nil {
 				log.Fatalf("Failed to load: %v (%v)", err, obj.Name)
 			}
@@ -92,45 +97,54 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*Media
 	}()
 
 	for m := range ch {
-		mi.insertInternal(ctx, client, m, false)
+		os.insertInternal(ctx, client, m, false)
 	}
-	mi.saveAll(ctx, client)
+	os.saveAll(ctx, client)
 	log.Printf("Read %d Media objects, took %v seconds",
-		len(mi.All()), float64(time.Now().UnixNano()-t)/1000000000.0)
-	return &mi, nil
+		len(os.All()), float64(time.Now().UnixNano()-t)/1000000000.0)
+	return &os, nil
 }
 
 // Insert saves a new Media object. If this objects Key is the same as an existing object it will
 // replace it if its timestamp is newer, if this new object is older it will drop it.
-func (mi *MediaInfo) Insert(ctx context.Context, string key, object []byte) {
-  {
-    os.mutex.Lock()
-    defer os.mutex.Unlock()
-    
-    timestamp = 0 // TODO: Get the timestamp
-	  i, ok := mi.index[key]
-	if ok {
-		mi.data.Media[i] = media
-	} else {
-		mi.index[key] = len(mi.data.Media)
-		mi.data.Media = append(mi.data.Media, media)
-	}
-  }
+func (os *objectStore) Insert(ctx context.Context, key string, object []byte) {
+	var obj schema.Object
+	obj.Key = key
+	obj.Object = object
 
-  if err := mi.saveOne(ctx, client, media); err != nil {
+	{
+		os.mutex.Lock()
+		defer os.mutex.Unlock()
+
+		// We wait until we have the lock to set the timestamp.
+		obj.TimestampNanoSeconds = time.Now().UnixNano()
+
+		i, ok := os.index[key]
+		if ok {
+			os.data.Item[i] = &obj
+		} else {
+			os.index[key] = len(os.data.Item)
+			os.data.Item = append(os.data.Item, &obj)
+		}
+	}
+
+	var tmp schema.ObjectSet
+	tmp.Item = append(tmp.Item, &obj)
+	if err := os.save(ctx, "", &tmp); err != nil {
 		log.Fatalf("Failed to write: %v", err)
 	}
 }
 
+/*
 // DeleteFast deletes a referenced Media object but doesn't save. To save you need to call Flush.
-func (mi *MediaInfo) Delete(key [32]byte) {
-  Insert(ctx, key, nil)
+func (os *objectStore) Delete(key [32]byte) {
+	Insert(ctx, key, nil)
 }
 
-func (mi *MediaInfo) Get(key [32]byte) *[]byte {
-  os.mutex.RLock()
-  defer os.mutex.RUnlock()
-	i, ok := mi.index[key]
+func (os *objectStore) Get(key [32]byte) *[]byte {
+	os.mutex.RLock()
+	defer os.mutex.RUnlock()
+	i, ok := os.index[key]
 	if !ok {
 		return nil
 	}
@@ -139,17 +153,42 @@ func (mi *MediaInfo) Get(key [32]byte) *[]byte {
 }
 
 // How to deal with this when we use locks? ...
-func (mi *MediaInfo) All() []*message.Media {
-	return mi.data.Media
+func (os *objectStore) All() []*object {
+	return os.data.Media
+}
+*/
+
+func (os *objectStore) save(ctx context.Context, filename string, p *schema.ObjectSet) error {
+	data, err := proto.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshalling proto: %v", err)
+	}
+
+	if filename == "" {
+		shasum := sha256.Sum256(data)
+		filename = fmt.Sprintf("%s.os", hex.EncodeToString(shasum[:]))
+	}
+
+	wc := os.client.Bucket(os.bucketName).Object(filename).NewWriter(ctx)
+	checksum := md5.Sum(data)
+	wc.MD5 = checksum[:]
+	if _, err := wc.Write(data); err != nil {
+		return fmt.Errorf("writing data: %v", err)
+	}
+	if err := wc.Close(); err != nil {
+		return fmt.Errorf("closing file: %v", err)
+	}
+	return nil
 }
 
-func load(ctx context.Context, client *storage.Client, bucketName, filename string, p proto.Message) error {
-	reader, err := client.Bucket(bucketName).Object(filename).NewReader(ctx)
+func (os *objectStore) load(ctx context.Context, filename string, p *schema.ObjectSet) error {
+	reader, err := os.client.Bucket(os.bucketName).Object(filename).NewReader(ctx)
 	if err != nil {
+		// Why do we handle this error specially?
 		if err == storage.ErrObjectNotExist {
 			return err
 		}
-		return fmt.Errorf("creating new reader: %v", err)
+		return fmt.Errorf("Opening file: %v", err)
 	}
 
 	slurp, err := ioutil.ReadAll(reader)
@@ -160,29 +199,6 @@ func load(ctx context.Context, client *storage.Client, bucketName, filename stri
 
 	if err := proto.Unmarshal(slurp, p); err != nil {
 		return fmt.Errorf("unmarshalling proto: %v", err)
-	}
-	return nil
-}
-
-func (os *ObjectStore) save(ctx context.Context, filename string, p proto.Message) error {
-	data, err := proto.Marshal(p)
-	if err != nil {
-		return fmt.Errorf("marshalling proto: %v", err)
-	}
-  
-  if filename == "" {
-    	shasum := sha256.Sum256(data)
-	filename := fmt.Sprintf("%s.os", hex.EncodeToString(shasum[:]))
-  }
-
-	wc := client.Bucket(bucketName).Object(filename).NewWriter(ctx)
-	checksum := md5.Sum(data)
-	wc.MD5 = checksum[:]
-	if _, err := wc.Write(data); err != nil {
-		return fmt.Errorf("writing data: %v", err)
-	}
-	if err := wc.Close(); err != nil {
-		return fmt.Errorf("closing file: %v", err)
 	}
 	return nil
 }
