@@ -19,7 +19,7 @@ type storageClient struct {
 	filePrefix string
 }
 
-func (this *storageClient) list(ctx context.Context) *storageIter {
+func (this *storageClient) list(ctx context.Context) storageListInterface {
 	it := this.client.Bucket(this.bucketName).Objects(ctx, &storage.Query{Prefix: this.filePrefix})
 	return &storageIter{iter: it, subsize: len(this.filePrefix)}
 }

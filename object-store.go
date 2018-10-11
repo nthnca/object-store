@@ -25,7 +25,7 @@ const (
 // New to get a handle.
 type ObjectStore struct {
 	// Client for accessing the storage.
-	client *storageClient
+	client storageClientInterface
 
 	// RWMutex to protect data and index.
 	mutex sync.RWMutex
@@ -42,11 +42,17 @@ type KeyValueOperation func(string, []byte)
 // New will load the current state of an ObjectStore from the given bucket and
 // prefix and return an ObjectStore handle for performing actions.
 func New(ctx context.Context, client *storage.Client, bucketName, filePrefix string) (*ObjectStore, error) {
+	xcl := &storageClient{}
+	xcl.client = client
+	xcl.bucketName = bucketName
+	xcl.filePrefix = filePrefix
+
+	return internal_new(ctx, xcl)
+}
+
+func internal_new(ctx context.Context, client storageClientInterface) (*ObjectStore, error) {
 	var os ObjectStore
-	os.client = &storageClient{}
-	os.client.client = client
-	os.client.bucketName = bucketName
-	os.client.filePrefix = filePrefix
+	os.client = client
 	os.index = make(map[string]int)
 
 	var wg sync.WaitGroup
