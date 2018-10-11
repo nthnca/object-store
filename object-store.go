@@ -55,18 +55,12 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 	oops = nil
 	ch := make(chan *schema.ObjectSet)
 
-	bucket := client.Bucket(bucketName)
-	for it := bucket.Objects(ctx, nil); ; {
-		obj, err := it.Next()
-		if err != nil {
-			if err == iterator.Done {
-				break
-			}
-			return nil, fmt.Errorf("Failed to iterate through objects: %v", err)
-		}
-
+	it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: os.filePrefix})
+	obj2, err := it.Next()
+	for ; err == nil; obj2, err = it.Next() {
+		obj := obj2
 		// We don't want to prune the masterFileName.
-		if obj.Name != masterFileName {
+		if obj.Name != os.filePrefix+masterFileName {
 			os.files = append(os.files, obj.Name)
 		}
 
@@ -74,12 +68,15 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 		go func() {
 			defer wg.Done()
 			var tmp schema.ObjectSet
-			err := os.load(ctx, obj.Name, &tmp)
-			if err != nil {
-				oops = fmt.Errorf("Failed to load: %v (%v)", err, obj.Name)
+			errx := os.load(ctx, obj.Name, &tmp)
+			if errx != nil {
+				oops = fmt.Errorf("Failed to load: %v (%v)", errx, obj.Name)
 			}
 			ch <- &tmp
 		}()
+	}
+	if err != iterator.Done {
+		return nil, fmt.Errorf("Failed to iterate through objects: %v", err)
 	}
 
 	go func() {
@@ -211,6 +208,7 @@ func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.Obje
 		filename = fmt.Sprintf("%s.os", hex.EncodeToString(shasum[:]))
 	}
 
+	filename = os.filePrefix + filename
 	wc := os.client.Bucket(os.bucketName).Object(filename).NewWriter(ctx)
 	checksum := md5.Sum(data)
 	wc.MD5 = checksum[:]
