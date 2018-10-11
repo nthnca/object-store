@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"sync"
 	"time"
 
@@ -51,48 +52,47 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 	os.index = make(map[string]int)
 
 	var wg sync.WaitGroup
-	var oops error
-	oops = nil
-	ch := make(chan *schema.ObjectSet)
+	var load_err error
+	ch_obj := make(chan *schema.ObjectSet)
 
 	it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: os.filePrefix})
-	obj2, err := it.Next()
-	for ; err == nil; obj2, err = it.Next() {
-		obj := obj2
-
+	obj, iter_err := it.Next()
+	for ; iter_err == nil && load_err == nil; obj, iter_err = it.Next() {
 		// We don't want to prune the masterFileName.
 		if obj.Name != os.filePrefix+masterFileName {
 			os.files = append(os.files, obj.Name)
 		}
 
 		wg.Add(1)
-		go func() {
+		go func(filename string) {
 			defer wg.Done()
 			var tmp schema.ObjectSet
-			errx := os.load(ctx, obj.Name, &tmp)
-			if errx != nil {
-				oops = fmt.Errorf("Failed to load: %v (%v)", errx, obj.Name)
+			err := os.load(ctx, filename, &tmp)
+			if err != nil {
+				load_err = err
 			}
-			ch <- &tmp
-		}()
-	}
-	if err != iterator.Done {
-		return nil, fmt.Errorf("Failed to iterate through objects: %v", err)
+			ch_obj <- &tmp
+		}(obj.Name)
 	}
 
 	go func() {
 		wg.Wait()
-		close(ch)
+		close(ch_obj)
 	}()
 
-	for obj := range ch {
+	for obj := range ch_obj {
 		for _, o := range obj.Item {
 			os.addToData(o)
 		}
 	}
 
-	if oops != nil {
-		return nil, oops
+	if load_err != nil {
+		return nil, fmt.Errorf("Failed to load: %v", load_err)
+	}
+
+	if iter_err != iterator.Done {
+		return nil, fmt.Errorf("Failed to iterate through objects: %v",
+			iter_err)
 	}
 
 	return &os, nil
@@ -122,20 +122,24 @@ func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) er
 
 // Delete removes a value for a given key.
 func (os *ObjectStore) Delete(ctx context.Context, key string) error {
-	os.Insert(ctx, key, nil)
+	return os.Insert(ctx, key, nil)
+}
+
+// InsertBulk adds, updates, or deletes a group of key-values together.
+func (os *ObjectStore) InsertBulk(ctx context.Context, index map[string][]byte) error {
 	return nil
 }
 
 // Get returns the value associated with a given key.
-func (os *ObjectStore) Get(key string) ([]byte, error) {
-	os.mutex.Lock()
-	defer os.mutex.Unlock()
+func (os *ObjectStore) Get(key string) []byte {
+	os.mutex.RLock()
+	defer os.mutex.RUnlock()
 
 	i, ok := os.index[key]
 	if ok {
-		return os.data.Item[i].Object, nil
+		return os.data.Item[i].Object
 	}
-	return nil, nil
+	return nil
 }
 
 // KeyValueOperation allows you to interact with a given key, value pair.
@@ -159,10 +163,12 @@ func (os *ObjectStore) addToData(obj *schema.Object) {
 			os.data.Item[i] = obj
 		}
 	} else {
-		if len(obj.Object) > 0 {
-			os.index[obj.Key] = len(os.data.Item)
-			os.data.Item = append(os.data.Item, obj)
-		}
+		// Is this optimization safe? Are you sure?
+		// if len(obj.Object) > 0 {
+		// 	return
+		// }
+		os.index[obj.Key] = len(os.data.Item)
+		os.data.Item = append(os.data.Item, obj)
 	}
 }
 
@@ -175,7 +181,6 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 		return
 	}
 
-	// TODO make sure this saved!!!
 	_, err := os.save(ctx, masterFileName, &os.data)
 	if err != nil {
 		// We should log here I guess.
@@ -184,15 +189,15 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 
 	var wg sync.WaitGroup
 	for _, f := range os.files {
-		x := f
 		wg.Add(1)
-		go func() {
+		go func(filename string) {
 			defer wg.Done()
-			err := os.client.Bucket(os.bucketName).Object(x).Delete(ctx)
+			err := os.client.Bucket(os.bucketName).Object(filename).Delete(ctx)
 			if err != nil {
 				// We don't care that much, but should still log.
+				log.Printf("Failed to delete %s: %v", filename, err)
 			}
-		}()
+		}(f)
 	}
 	wg.Wait()
 	os.files = []string{}
@@ -212,11 +217,12 @@ func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.Obje
 	filename = os.filePrefix + filename
 	wc := os.client.Bucket(os.bucketName).Object(filename).NewWriter(ctx)
 	checksum := md5.Sum(data)
+	// Setting the checksum insures a partial file doesn't get uploaded.
 	wc.MD5 = checksum[:]
-	if _, err := wc.Write(data); err != nil {
+	if _, err = wc.Write(data); err != nil {
 		return "", fmt.Errorf("writing data: %v", err)
 	}
-	if err := wc.Close(); err != nil {
+	if err = wc.Close(); err != nil {
 		return "", fmt.Errorf("closing file: %v", err)
 	}
 	return filename, nil
@@ -238,7 +244,7 @@ func (os *ObjectStore) load(ctx context.Context, filename string, p *schema.Obje
 		return fmt.Errorf("trying to read: %v", err)
 	}
 
-	if err := proto.Unmarshal(slurp, p); err != nil {
+	if err = proto.Unmarshal(slurp, p); err != nil {
 		return fmt.Errorf("unmarshalling proto: %v", err)
 	}
 	return nil
