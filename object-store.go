@@ -4,11 +4,9 @@ package objectstore
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"sync"
 	"time"
@@ -27,11 +25,7 @@ const (
 // New to get a handle.
 type ObjectStore struct {
 	// Client for accessing the storage.
-	client *storage.Client
-
-	// The bucket and prefix for this data.
-	bucketName string
-	filePrefix string
+	client *storageClient
 
 	// RWMutex to protect data and index.
 	mutex sync.RWMutex
@@ -49,21 +43,22 @@ type KeyValueOperation func(string, []byte)
 // prefix and return an ObjectStore handle for performing actions.
 func New(ctx context.Context, client *storage.Client, bucketName, filePrefix string) (*ObjectStore, error) {
 	var os ObjectStore
-	os.client = client
-	os.bucketName = bucketName
-	os.filePrefix = filePrefix
+	os.client = &storageClient{}
+	os.client.client = client
+	os.client.bucketName = bucketName
+	os.client.filePrefix = filePrefix
 	os.index = make(map[string]int)
 
 	var wg sync.WaitGroup
 	var load_err error
 	ch_obj := make(chan *schema.ObjectSet)
 
-	it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: os.filePrefix})
-	obj, iter_err := it.Next()
-	for ; iter_err == nil && load_err == nil; obj, iter_err = it.Next() {
+	it := os.client.list(ctx)
+	filename, iter_err := it.next()
+	for ; iter_err == nil && load_err == nil; filename, iter_err = it.next() {
 		// We don't want to prune the masterFileName.
-		if obj.Name != os.filePrefix+masterFileName {
-			os.files = append(os.files, obj.Name)
+		if filename != masterFileName {
+			os.files = append(os.files, filename)
 		}
 
 		wg.Add(1)
@@ -75,7 +70,7 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 				load_err = err
 			}
 			ch_obj <- &tmp
-		}(obj.Name)
+		}(filename)
 	}
 
 	go func() {
@@ -209,10 +204,10 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 		wg.Add(1)
 		go func(filename string) {
 			defer wg.Done()
-			err := os.client.Bucket(os.bucketName).Object(filename).Delete(ctx)
-			if err != nil {
+			errz := os.client.deleteFile(ctx, filename)
+			if errz != nil {
 				// We don't care.
-				log.Printf("Failed to delete %s: %v", filename, err)
+				log.Printf("Failed to delete %s: %v", filename, errz)
 			}
 		}(f)
 	}
@@ -230,34 +225,18 @@ func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.Obje
 		filename = fmt.Sprintf("%s.os", hex.EncodeToString(shasum[:]))
 	}
 
-	filename = os.filePrefix + filename
-	wc := os.client.Bucket(os.bucketName).Object(filename).NewWriter(ctx)
-	checksum := md5.Sum(data)
-	// Setting the checksum insures a partial file doesn't get uploaded.
-	wc.MD5 = checksum[:]
-	if _, err = wc.Write(data); err != nil {
-		return "", fmt.Errorf("writing data: %v", err)
-	}
-	if err = wc.Close(); err != nil {
-		return "", fmt.Errorf("closing file: %v", err)
-	}
-	return filename, nil
+	err = os.client.writeFile(ctx, filename, data)
+	return filename, err
 }
 
 func (os *ObjectStore) load(ctx context.Context, filename string, p *schema.ObjectSet) error {
-	reader, err := os.client.Bucket(os.bucketName).Object(filename).NewReader(ctx)
+	slurp, err := os.client.readFile(ctx, filename)
 	if err != nil {
 		// Why do we handle this error specially?
 		if err == storage.ErrObjectNotExist {
 			return err
 		}
-		return fmt.Errorf("Opening file: %v", err)
-	}
-
-	slurp, err := ioutil.ReadAll(reader)
-	reader.Close()
-	if err != nil {
-		return fmt.Errorf("trying to read: %v", err)
+		return fmt.Errorf("Reading file: %v", err)
 	}
 
 	if err = proto.Unmarshal(slurp, p); err != nil {
