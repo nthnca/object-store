@@ -5,6 +5,7 @@
 package objectstore
 
 import (
+	"bytes"
 	context "context"
 	"fmt"
 	"log"
@@ -124,9 +125,38 @@ func (mr *MockstorageListInterfaceMockRecorder) next() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "next", reflect.TypeOf((*MockstorageListInterface)(nil).next))
 }
 
-func ErrorPrefix(err error, prefix string) {
-	if err.Error()[:len(prefix)] != prefix {
+func ExpectErrNil(err error) {
+	if err != nil {
+		log.Fatalf("Expected error to be nil: %v", err)
+	}
+}
+
+func ExpectErrPrefix(err error, prefix string) {
+	if err == nil {
+		log.Fatalf("Expected error")
+	}
+	if len(err.Error()) < len(prefix) || err.Error()[:len(prefix)] != prefix {
 		log.Fatalf("Unexpected error: %v", err)
+	}
+}
+
+func ExpectOSNil(os *ObjectStore) {
+	if os != nil {
+		log.Fatalf("Expected ObjectStore object to be nil")
+	}
+}
+
+func ExpectSizeAndFiles(os *ObjectStore, size int, files []string) {
+	if len(os.data.Item) != size {
+		log.Fatalf("Expected ObjectStore data len of %d is %d", size, len(os.data.Item))
+	}
+	if len(os.files) != len(files) {
+		log.Fatalf("Expected ObjectStore files %v is %v", files, os.files)
+	}
+	for i := range files {
+		if files[i] != os.files[i] {
+			log.Fatalf("Expected ObjectStore files %v is %v", files, os.files)
+		}
 	}
 }
 
@@ -135,65 +165,154 @@ type baseFunc func()
 func TestErrors(t *testing.T) {
 	mockClient := NewMockstorageClientInterface(nil)
 	mockList := NewMockstorageListInterface(nil)
+
+	origMaxFiles := maxFiles
+	defer func() { maxFiles = origMaxFiles }()
+
+	origUnixNano := unixNano
+	defer func() { unixNano = origUnixNano }()
+
+	maxFiles = 3
+
 	curr := int64(1)
 	unixNano = func() int64 {
 		curr += 1
 		return curr
 	}
 
+	byte1 := []byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}
+
 	tests := []func(){
+		func() {
+			log.Printf("Success")
+
+			mockList.EXPECT().next().Return("", iterator.Done)
+
+			os, err := internal_new(nil, mockClient)
+			ExpectSizeAndFiles(os, 0, nil)
+			ExpectErrNil(err)
+		},
+		func() {
+			log.Printf("Success - 4 objects")
+
+			mockList.EXPECT().next().Return("obj1", nil)
+			mockList.EXPECT().next().Return("obj1", nil)
+			mockList.EXPECT().next().Return("obj1", nil)
+			mockList.EXPECT().next().Return("obj1", nil)
+			mockList.EXPECT().next().Return("", iterator.Done)
+
+			os, err := internal_new(nil, mockClient)
+			ExpectSizeAndFiles(os, 1, []string{"obj1", "obj1", "obj1", "obj1"})
+			ExpectErrNil(err)
+
+			b := os.Get("k")
+			if bytes.Compare(b, []byte("a")) != 0 {
+				log.Fatalf("Expected equality: %v", b)
+			}
+		},
+		func() {
+			log.Printf("Success - with master")
+
+			mockList.EXPECT().next().Return("obj1", nil)
+			mockList.EXPECT().next().Return("obj1", nil)
+			mockList.EXPECT().next().Return("obj1", nil)
+			mockList.EXPECT().next().Return("master.md", nil)
+			mockList.EXPECT().next().Return("", iterator.Done)
+			mockClient.EXPECT().readFile(nil, "master.md").Return(byte1, nil)
+
+			os, err := internal_new(nil, mockClient)
+			ExpectSizeAndFiles(os, 1, []string{"obj1", "obj1", "obj1"})
+			ExpectErrNil(err)
+
+			b := os.Get("k")
+			if bytes.Compare(b, []byte("a")) != 0 {
+				log.Fatalf("Expected equality: %v", b)
+			}
+		},
 		func() {
 			log.Printf("List Error")
 
-			mockClient.EXPECT().list(nil).Return(mockList)
 			mockList.EXPECT().next().Return("", fmt.Errorf("Sorry"))
 
-			_, err := internal_new(nil, mockClient)
-			ErrorPrefix(err, "Failed to iterate through objects: ")
+			os, err := internal_new(nil, mockClient)
+			ExpectOSNil(os)
+			ExpectErrPrefix(err, "Failed to iterate through objects: ")
 		},
 		func() {
 			log.Printf("List Error Oops")
 
-			mockClient.EXPECT().list(nil).Return(mockList)
-			mockList.EXPECT().next().Return("abc", nil)
+			mockList.EXPECT().next().Return("obj1", nil)
 			mockList.EXPECT().next().Return("", fmt.Errorf("Sorry"))
-			b := []byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}
-			mockClient.EXPECT().readFile(nil, "abc").Return(b, nil)
 
-			_, err := internal_new(nil, mockClient)
-			ErrorPrefix(err, "Failed to iterate through objects: ")
+			os, err := internal_new(nil, mockClient)
+			ExpectOSNil(os)
+			ExpectErrPrefix(err, "Failed to iterate through objects: ")
 		},
 		func() {
-			log.Printf("Read Error")
+			log.Printf("Parse error")
 
-			mockClient.EXPECT().list(nil).Return(mockList)
+			mockList.EXPECT().next().Return("abc", nil)
+			mockList.EXPECT().next().Return("", iterator.Done)
+			mockClient.EXPECT().readFile(nil, "abc").
+				Return([]byte("not a proto"), nil)
+
+			os, err := internal_new(nil, mockClient)
+			ExpectOSNil(os)
+			ExpectErrPrefix(err, "unmarshalling proto: ")
+		},
+		func() {
+			log.Printf("Read error - break")
+
+			mockList.EXPECT().next().Return("abc", nil)
+			mockList.EXPECT().next().Return("obj1", nil).AnyTimes()
+			mockClient.EXPECT().readFile(nil, "abc").
+				Return(nil, fmt.Errorf("Sorry"))
+
+			os, err := internal_new(nil, mockClient)
+			ExpectOSNil(os)
+			ExpectErrPrefix(err, "Reading file: ")
+		},
+		func() {
+			log.Printf("Read Error - only")
+
 			mockList.EXPECT().next().Return("abc", nil)
 			mockList.EXPECT().next().Return("", iterator.Done)
 			mockClient.EXPECT().readFile(nil, "abc").
 				Return(nil, fmt.Errorf("Sorry"))
 
-			_, err := internal_new(nil, mockClient)
-			ErrorPrefix(err, "Reading file: ")
+			os, err := internal_new(nil, mockClient)
+			ExpectOSNil(os)
+			ExpectErrPrefix(err, "Reading file: ")
 		},
 		func() {
 			log.Printf("Read File Not Found")
 
-			mockClient.EXPECT().list(nil).Return(mockList)
 			mockList.EXPECT().next().Return("abc", nil)
 			mockList.EXPECT().next().Return("", iterator.Done)
 			mockClient.EXPECT().readFile(nil, "abc").
 				Return(nil, storage.ErrObjectNotExist)
 
-			_, err := internal_new(nil, mockClient)
+			os, err := internal_new(nil, mockClient)
+			ExpectOSNil(os)
 			if err != storage.ErrObjectNotExist {
 				log.Fatalf("Unexpected error: %v", err)
 			}
 		},
 		func() {
-			log.Printf("Success")
-			curr = 1
+			log.Printf("Insert - Write failure")
 
-			mockClient.EXPECT().list(nil).Return(mockList)
+			mockList.EXPECT().next().Return("", iterator.Done)
+			mockClient.EXPECT().writeFile(nil,
+				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
+				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(fmt.Errorf("Sorry"))
+
+			os, err := internal_new(nil, mockClient)
+			err = os.Insert(nil, "k", []byte("a"))
+			ExpectErrPrefix(err, "Failed to write: ")
+		},
+		func() {
+			log.Printf("Insert - Success")
+
 			mockList.EXPECT().next().Return("", iterator.Done)
 			mockClient.EXPECT().writeFile(nil,
 				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
@@ -205,6 +324,42 @@ func TestErrors(t *testing.T) {
 				log.Fatalf("Expected success: %v", err)
 			}
 		},
+		func() {
+			log.Printf("Get - Success")
+
+			mockList.EXPECT().next().Return("", iterator.Done)
+			mockClient.EXPECT().writeFile(nil,
+				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
+				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(nil)
+
+			os, err := internal_new(nil, mockClient)
+			err = os.Insert(nil, "k", []byte("a"))
+			if err != nil {
+				log.Fatalf("Expected success: %v", err)
+			}
+			b := os.Get("k")
+			if bytes.Compare(b, []byte("a")) != 0 {
+				log.Fatalf("Expected equality: %v", b)
+			}
+		},
+		func() {
+			log.Printf("Get - Success")
+
+			mockList.EXPECT().next().Return("", iterator.Done)
+			mockClient.EXPECT().writeFile(nil,
+				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
+				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(nil)
+
+			os, err := internal_new(nil, mockClient)
+			err = os.Insert(nil, "k", []byte("a"))
+			if err != nil {
+				log.Fatalf("Expected success: %v", err)
+			}
+			b := os.Get("k")
+			if bytes.Compare(b, []byte("a")) != 0 {
+				log.Fatalf("Expected equality: %v", b)
+			}
+		},
 	}
 
 	for _, f := range tests {
@@ -213,6 +368,11 @@ func TestErrors(t *testing.T) {
 
 		mockClient = NewMockstorageClientInterface(mockCtrl)
 		mockList = NewMockstorageListInterface(mockCtrl)
+		curr = 1
+
+		// Standard Expectations
+		mockClient.EXPECT().list(nil).Return(mockList).AnyTimes()
+		mockClient.EXPECT().readFile(nil, "obj1").Return(byte1, nil).AnyTimes()
 
 		f()
 	}

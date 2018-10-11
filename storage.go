@@ -40,7 +40,7 @@ func (this *storageClient) readFile(ctx context.Context, filename string) ([]byt
 }
 
 func (this *storageClient) writeFile(ctx context.Context, filename string, contents []byte) error {
-	writer := this.client.Bucket(this.bucketName).Object(filename).NewWriter(ctx)
+	writer := this.client.Bucket(this.bucketName).Object(this.filePrefix + filename).NewWriter(ctx)
 	checksum := md5.Sum(contents)
 
 	// Setting the checksum insures a partial file doesn't get uploaded.

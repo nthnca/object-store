@@ -23,6 +23,7 @@ const (
 
 var (
 	unixNano = time.Now().UnixNano
+	maxFiles = 30
 )
 
 // ObjectStore provides operations on the set of data in an ObjectStore. Use
@@ -78,6 +79,7 @@ func internal_new(ctx context.Context, client storageClientInterface) (*ObjectSt
 			err := os.load(ctx, filename, &tmp)
 			if err != nil {
 				load_err = err
+				return
 			}
 			ch_obj <- &tmp
 		}(filename)
@@ -193,7 +195,7 @@ func (os *ObjectStore) addToData(objset *schema.ObjectSet) {
 
 func (os *ObjectStore) prune(ctx context.Context, filename string) {
 	os.files = append(os.files, filename)
-	if len(os.files) < 30 {
+	if len(os.files) < maxFiles {
 		return
 	}
 
