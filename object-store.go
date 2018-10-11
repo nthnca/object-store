@@ -27,7 +27,7 @@ type ObjectStore struct {
 	// Client for accessing the storage.
 	client storageClientInterface
 
-	// RWMutex to protect data and index.
+	// RWMutex to protect data.
 	mutex sync.RWMutex
 	data  schema.ObjectSet
 	index map[string]int
@@ -89,12 +89,11 @@ func internal_new(ctx context.Context, client storageClientInterface) (*ObjectSt
 	}
 
 	if load_err != nil {
-		return nil, fmt.Errorf("Failed to load: %v", load_err)
+		return nil, load_err
 	}
 
 	if iter_err != iterator.Done {
-		return nil, fmt.Errorf("Failed to iterate through objects: %v",
-			iter_err)
+		return nil, fmt.Errorf("Failed to iterate through objects: %v", iter_err)
 	}
 
 	return &os, nil
