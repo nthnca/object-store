@@ -1,4 +1,5 @@
-// Package objectstore.
+// Package objectstore provides an objectstore that uses Google cloud storage
+// to persist the data.
 package objectstore
 
 import (
@@ -14,7 +15,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/golang/protobuf/proto"
-	"github.com/nthnca/object-store/schema"
+	"github.com/nthnca/object-store/internal/schema"
 	"google.golang.org/api/iterator"
 )
 
