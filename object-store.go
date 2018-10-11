@@ -45,10 +45,11 @@ type ObjectStore struct {
 
 // New will load the current state of an ObjectStore from the given bucket and
 // prefix and return an ObjectStore handle for performing actions.
-func New(ctx context.Context, client *storage.Client, bucketName string) (*ObjectStore, error) {
+func New(ctx context.Context, client *storage.Client, bucketName, filePrefix string) (*ObjectStore, error) {
 	var os ObjectStore
 	os.client = client
 	os.bucketName = bucketName
+	os.filePrefix = filePrefix
 	os.index = make(map[string]int)
 
 	t := time.Now().UnixNano()
@@ -65,6 +66,11 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*Objec
 				break
 			}
 			log.Fatalf("Failed to iterate through objects: %v", err)
+		}
+
+		// We don't want to prune the masterFileName.
+		if obj.Name != masterFileName {
+			os.files = append(os.files, obj.Name)
 		}
 
 		wg.Add(1)
@@ -86,12 +92,9 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*Objec
 
 	for obj := range ch {
 		for _, o := range obj.Item {
-			// Fix, we don't need the lock in this case.
 			os.addToData(o)
 		}
 	}
-
-	// os.saveAll(ctx, client)
 
 	log.Printf("Read %d Media objects, took %v seconds",
 		len(os.data.Item), float64(time.Now().UnixNano()-t)/1000000000.0)
@@ -110,9 +113,12 @@ func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) er
 
 	var tmp schema.ObjectSet
 	tmp.Item = append(tmp.Item, &obj)
-	if err := os.save(ctx, "", &tmp); err != nil {
+	filename, err := os.save(ctx, "", &tmp)
+	if err != nil {
 		log.Fatalf("Failed to write: %v", err)
 	}
+
+	os.prune(ctx, filename)
 
 	return nil
 }
@@ -125,6 +131,13 @@ func (os *ObjectStore) Delete(ctx context.Context, key string) error {
 
 // Get returns the value associated with a given key.
 func (os *ObjectStore) Get(key string) ([]byte, error) {
+	os.mutex.Lock()
+	defer os.mutex.Unlock()
+
+	i, ok := os.index[key]
+	if ok {
+		return os.data.Item[i].Object, nil
+	}
 	return nil, nil
 }
 
@@ -149,35 +162,48 @@ func (os *ObjectStore) addToData(obj *schema.Object) {
 			os.data.Item[i] = obj
 		}
 	} else {
-		os.index[obj.Key] = len(os.data.Item)
-		os.data.Item = append(os.data.Item, obj)
+		if len(obj.Object) > 0 {
+			os.index[obj.Key] = len(os.data.Item)
+			os.data.Item = append(os.data.Item, obj)
+		}
 	}
 }
 
-/*
-// DeleteFast deletes a referenced Media object but doesn't save. To save you need to call Flush.
+func (os *ObjectStore) prune(ctx context.Context, filename string) {
+	os.mutex.Lock()
+	defer os.mutex.Unlock()
 
-func (os *ObjectStore) Get(key [32]byte) *[]byte {
-	os.mutex.RLock()
-	defer os.mutex.RUnlock()
-	i, ok := os.index[key]
-	if !ok {
-		return nil
+	os.files = append(os.files, filename)
+	if len(os.files) < 30 {
+		return
 	}
 
-	return i
+	// TODO make sure this saved!!!
+	_, err := os.save(ctx, masterFileName, &os.data)
+	if err != nil {
+		log.Fatalf("failed to save the updated file.")
+	}
+
+	var wg sync.WaitGroup
+	for _, f := range os.files {
+		x := f
+		wg.Add(1)
+		go func() {
+			err := os.client.Bucket(os.bucketName).Object(x).Delete(ctx)
+			if err != nil {
+				// We don't care that much, but should still log.
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+	os.files = []string{}
 }
 
-// How to deal with this when we use locks? ...
-func (os *ObjectStore) All() []*object {
-	return os.data.Media
-}
-*/
-
-func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.ObjectSet) error {
+func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.ObjectSet) (string, error) {
 	data, err := proto.Marshal(p)
 	if err != nil {
-		return fmt.Errorf("marshalling proto: %v", err)
+		return "", fmt.Errorf("marshalling proto: %v", err)
 	}
 
 	if filename == "" {
@@ -189,12 +215,12 @@ func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.Obje
 	checksum := md5.Sum(data)
 	wc.MD5 = checksum[:]
 	if _, err := wc.Write(data); err != nil {
-		return fmt.Errorf("writing data: %v", err)
+		return "", fmt.Errorf("writing data: %v", err)
 	}
 	if err := wc.Close(); err != nil {
-		return fmt.Errorf("closing file: %v", err)
+		return "", fmt.Errorf("closing file: %v", err)
 	}
-	return nil
+	return filename, nil
 }
 
 func (os *ObjectStore) load(ctx context.Context, filename string, p *schema.ObjectSet) error {
