@@ -130,6 +130,21 @@ func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) er
 func (os *ObjectStore) InsertBulk(ctx context.Context, index map[string][]byte) error {
 	os.mutex.Lock()
 	defer os.mutex.Unlock()
+	timestamp := time.Now().UnixNano()
+
+	for key, data := range index {
+		var obj schema.Object
+		obj.Key = key
+		obj.TimestampNanoSeconds = timestamp
+		obj.Object = data
+
+		os.addToData(&obj)
+	}
+
+	_, err := os.save(ctx, masterFileName, &os.data)
+	if err != nil {
+		return fmt.Errorf("Failed to write: %v", err)
+	}
 
 	return nil
 }
