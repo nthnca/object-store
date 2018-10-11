@@ -83,10 +83,8 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 		close(ch_obj)
 	}()
 
-	for obj := range ch_obj {
-		for _, o := range obj.Item {
-			os.addToData(o)
-		}
+	for objset := range ch_obj {
+		os.addToData(objset)
 	}
 
 	if load_err != nil {
@@ -101,49 +99,33 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 	return &os, nil
 }
 
-// Insert adds or updates a value for a given key. If the key is already used
-// this new value will replace the existing value.
-func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) error {
-	var obj schema.Object
-	obj.Key = key
-	obj.TimestampNanoSeconds = time.Now().UnixNano()
-	obj.Object = object
-
-	os.mutex.Lock()
-	defer os.mutex.Unlock()
-
-	os.addToData(&obj)
-
-	var tmp schema.ObjectSet
-	tmp.Item = append(tmp.Item, &obj)
-	filename, err := os.save(ctx, "", &tmp)
-	if err != nil {
-		return fmt.Errorf("Failed to write: %v", err)
-	}
-
-	os.prune(ctx, filename)
-
-	return nil
-}
-
 // InsertBulk adds, updates, or deletes a group of key-values together.
 func (os *ObjectStore) InsertBulk(ctx context.Context, index map[string][]byte) error {
-	os.mutex.Lock()
-	defer os.mutex.Unlock()
 	timestamp := time.Now().UnixNano()
-
-	for key, data := range index {
+	var objset schema.ObjectSet
+	for key, object := range index {
 		var obj schema.Object
 		obj.Key = key
 		obj.TimestampNanoSeconds = timestamp
-		obj.Object = data
-
-		os.addToData(&obj)
+		if len(object) == 0 {
+			object = nil
+		}
+		obj.Object = object
+		objset.Item = append(objset.Item, &obj)
 	}
 
-	_, err := os.save(ctx, masterFileName, &os.data)
+	filename, err := os.save(ctx, "", &objset)
 	if err != nil {
 		return fmt.Errorf("Failed to write: %v", err)
+	}
+
+	{
+		os.mutex.Lock()
+		defer os.mutex.Unlock()
+
+		// Data successfully persisted, so safe to change our state
+		os.addToData(&objset)
+		os.prune(ctx, filename)
 	}
 
 	return nil
@@ -175,26 +157,33 @@ func (os *ObjectStore) ForEach(op KeyValueOperation) {
 	}
 }
 
-// Delete removes a value for a given key.
-func (os *ObjectStore) Delete(ctx context.Context, key string) error {
-	return os.Insert(ctx, key, nil)
+// Insert adds or updates a value for a given key. If the key is already used
+// this new value will replace the existing value.
+func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) error {
+	tmp := make(map[string][]byte)
+	tmp[key] = object
+	return os.InsertBulk(ctx, tmp)
 }
 
-// addToData takes the write lock and adds this schema.Object to the data and
-// index.
-func (os *ObjectStore) addToData(obj *schema.Object) {
-	i, ok := os.index[obj.Key]
-	if ok {
-		if obj.TimestampNanoSeconds > os.data.Item[i].TimestampNanoSeconds {
-			os.data.Item[i] = obj
+// Delete removes a value for a given key.
+func (os *ObjectStore) Delete(ctx context.Context, key string) error {
+	tmp := make(map[string][]byte)
+	tmp[key] = nil
+	return os.InsertBulk(ctx, tmp)
+}
+
+// addToData merges objset with our master data and index.
+func (os *ObjectStore) addToData(objset *schema.ObjectSet) {
+	for _, obj := range objset.Item {
+		i, ok := os.index[obj.Key]
+		if ok {
+			if obj.TimestampNanoSeconds > os.data.Item[i].TimestampNanoSeconds {
+				os.data.Item[i] = obj
+			}
+		} else {
+			os.index[obj.Key] = len(os.data.Item)
+			os.data.Item = append(os.data.Item, obj)
 		}
-	} else {
-		// Is this optimization safe? Are you sure?
-		// if len(obj.Object) > 0 {
-		// 	return
-		// }
-		os.index[obj.Key] = len(os.data.Item)
-		os.data.Item = append(os.data.Item, obj)
 	}
 }
 
@@ -204,6 +193,11 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 		return
 	}
 
+	files := os.files
+	os.files = []string{}
+
+	// Todo, if we marshalled the data here the save and deletes could
+	// all happen post prune method return.
 	_, err := os.save(ctx, masterFileName, &os.data)
 	if err != nil {
 		// We should log here I guess.
@@ -211,19 +205,18 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 	}
 
 	var wg sync.WaitGroup
-	for _, f := range os.files {
+	for _, f := range files {
 		wg.Add(1)
 		go func(filename string) {
 			defer wg.Done()
 			err := os.client.Bucket(os.bucketName).Object(filename).Delete(ctx)
 			if err != nil {
-				// We don't care that much, but should still log.
+				// We don't care.
 				log.Printf("Failed to delete %s: %v", filename, err)
 			}
 		}(f)
 	}
 	wg.Wait()
-	os.files = []string{}
 }
 
 func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.ObjectSet) (string, error) {
