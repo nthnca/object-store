@@ -23,6 +23,8 @@ const (
 	masterFileName = "master.md"
 )
 
+// ObjectStore provides operations on the set of data in an ObjectStore. Use
+// New to get an ObjectStore.
 type ObjectStore struct {
 	// Client for accessing the storage.
 	client *storage.Client
