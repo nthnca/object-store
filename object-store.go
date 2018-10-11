@@ -1,4 +1,4 @@
-// Package objectstore provides persistent key-value storage and uses
+// Package objectstore provides persistent key-value storage, using
 // Google cloud storage to persist the data.
 package objectstore
 
@@ -24,7 +24,7 @@ const (
 )
 
 // ObjectStore provides operations on the set of data in an ObjectStore. Use
-// New to get an ObjectStore handle.
+// New to get a handle.
 type ObjectStore struct {
 	// Client for accessing the storage.
 	client *storage.Client
@@ -43,8 +43,8 @@ type ObjectStore struct {
 	files []string
 }
 
-// New will load the current state of the ObjectStore from the given bucket
-// and return an ObjectStore handle for performing actions.
+// New will load the current state of an ObjectStore from the given bucket and
+// prefix and return an ObjectStore handle for performing actions.
 func New(ctx context.Context, client *storage.Client, bucketName string) (*ObjectStore, error) {
 	var os ObjectStore
 	os.client = client
@@ -126,6 +126,15 @@ func (os *ObjectStore) Delete(ctx context.Context, key string) error {
 // Get returns the value associated with a given key.
 func (os *ObjectStore) Get(key string) ([]byte, error) {
 	return nil, nil
+}
+
+// KeyValueOperation allows you to interact with a given key, value pair.
+type KeyValueOperation func(string, []byte)
+
+// All performs operation op on all key, value pairs in the ObjectStore. Note
+// that all of these operations are run from inside a read lock so you
+// will not be able to perform Insert/Delete operation.
+func (os *ObjectStore) All(op KeyValueOperation) {
 }
 
 // addToData takes the write lock and adds this schema.Object to the data and
