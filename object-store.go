@@ -148,7 +148,15 @@ type KeyValueOperation func(string, []byte)
 // All performs operation op on all key, value pairs in the ObjectStore. Note
 // that all of these operations are run from inside a read lock so you
 // will not be able to perform Insert/Delete operation.
-func (os *ObjectStore) All(op KeyValueOperation) {
+func (os *ObjectStore) ForEach(op KeyValueOperation) {
+	os.mutex.RLock()
+	defer os.mutex.RUnlock()
+
+	for _, obj := range os.data.Item {
+		if obj.Object != nil {
+			op(obj.Key, obj.Object)
+		}
+	}
 }
 
 // addToData takes the write lock and adds this schema.Object to the data and
