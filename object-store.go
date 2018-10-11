@@ -22,7 +22,7 @@ const (
 	masterFileName = "master.md"
 )
 
-type objectStore struct {
+type ObjectStore struct {
 	// Client for accessing the storage.
 	client *storage.Client
 
@@ -39,16 +39,16 @@ type objectStore struct {
 	files []string
 }
 
-// New will load the Media objects from the given bucket and return a objectStore object
+// New will load the Media objects from the given bucket and return a ObjectStore object
 // that will allow you to continue to add Media objects to this bucket.
-func New(ctx context.Context, client *storage.Client, bucketName string) (*objectStore, error) {
-	var os objectStore
+func New(ctx context.Context, client *storage.Client, bucketName string) (*ObjectStore, error) {
+	var os ObjectStore
 	os.client = client
 	os.bucketName = bucketName
 	os.index = make(map[string]int)
 
 	t := time.Now().UnixNano()
-	log.Printf("Reading objectStore: %s", bucketName)
+	log.Printf("Reading ObjectStore: %s", bucketName)
 
 	var wg sync.WaitGroup
 	ch := make(chan *schema.ObjectSet)
@@ -96,7 +96,7 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*objec
 
 // Insert saves a new Media object. If this objects Key is the same as an existing object it will
 // replace it if its timestamp is newer, if this new object is older it will drop it.
-func (os *objectStore) Insert(ctx context.Context, key string, object []byte) {
+func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) {
 	var obj schema.Object
 	obj.Key = key
 	obj.TimestampNanoSeconds = time.Now().UnixNano()
@@ -112,7 +112,7 @@ func (os *objectStore) Insert(ctx context.Context, key string, object []byte) {
 }
 
 // addToData takes the write lock and adds this schema.Object to the data and index.
-func (os *objectStore) addToData(obj *schema.Object) {
+func (os *ObjectStore) addToData(obj *schema.Object) {
 	os.mutex.Lock()
 	defer os.mutex.Unlock()
 
@@ -129,11 +129,11 @@ func (os *objectStore) addToData(obj *schema.Object) {
 
 /*
 // DeleteFast deletes a referenced Media object but doesn't save. To save you need to call Flush.
-func (os *objectStore) Delete(key [32]byte) {
+func (os *ObjectStore) Delete(key [32]byte) {
 	Insert(ctx, key, nil)
 }
 
-func (os *objectStore) Get(key [32]byte) *[]byte {
+func (os *ObjectStore) Get(key [32]byte) *[]byte {
 	os.mutex.RLock()
 	defer os.mutex.RUnlock()
 	i, ok := os.index[key]
@@ -145,12 +145,12 @@ func (os *objectStore) Get(key [32]byte) *[]byte {
 }
 
 // How to deal with this when we use locks? ...
-func (os *objectStore) All() []*object {
+func (os *ObjectStore) All() []*object {
 	return os.data.Media
 }
 */
 
-func (os *objectStore) save(ctx context.Context, filename string, p *schema.ObjectSet) error {
+func (os *ObjectStore) save(ctx context.Context, filename string, p *schema.ObjectSet) error {
 	data, err := proto.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("marshalling proto: %v", err)
@@ -173,7 +173,7 @@ func (os *objectStore) save(ctx context.Context, filename string, p *schema.Obje
 	return nil
 }
 
-func (os *objectStore) load(ctx context.Context, filename string, p *schema.ObjectSet) error {
+func (os *ObjectStore) load(ctx context.Context, filename string, p *schema.ObjectSet) error {
 	reader, err := os.client.Bucket(os.bucketName).Object(filename).NewReader(ctx)
 	if err != nil {
 		// Why do we handle this error specially?
