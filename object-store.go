@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"sync"
 	"time"
 
@@ -38,8 +37,7 @@ type ObjectStore struct {
 	data  schema.ObjectSet
 	index map[string]int
 
-	// List of temporary files that can be deleted after the next full
-	// write.
+	// Files that can be deleted after the next full write.
 	files []string
 }
 
@@ -52,10 +50,9 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 	os.filePrefix = filePrefix
 	os.index = make(map[string]int)
 
-	t := time.Now().UnixNano()
-	log.Printf("Reading ObjectStore: %s", bucketName)
-
 	var wg sync.WaitGroup
+	var oops error
+	oops = nil
 	ch := make(chan *schema.ObjectSet)
 
 	bucket := client.Bucket(bucketName)
@@ -65,7 +62,7 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 			if err == iterator.Done {
 				break
 			}
-			log.Fatalf("Failed to iterate through objects: %v", err)
+			return nil, fmt.Errorf("Failed to iterate through objects: %v", err)
 		}
 
 		// We don't want to prune the masterFileName.
@@ -79,7 +76,7 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 			var tmp schema.ObjectSet
 			err := os.load(ctx, obj.Name, &tmp)
 			if err != nil {
-				log.Fatalf("Failed to load: %v (%v)", err, obj.Name)
+				oops = fmt.Errorf("Failed to load: %v (%v)", err, obj.Name)
 			}
 			ch <- &tmp
 		}()
@@ -96,8 +93,10 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 		}
 	}
 
-	log.Printf("Read %d Media objects, took %v seconds",
-		len(os.data.Item), float64(time.Now().UnixNano()-t)/1000000000.0)
+	if oops != nil {
+		return nil, oops
+	}
+
 	return &os, nil
 }
 
@@ -115,7 +114,7 @@ func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) er
 	tmp.Item = append(tmp.Item, &obj)
 	filename, err := os.save(ctx, "", &tmp)
 	if err != nil {
-		log.Fatalf("Failed to write: %v", err)
+		return fmt.Errorf("Failed to write: %v", err)
 	}
 
 	os.prune(ctx, filename)
@@ -181,7 +180,8 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 	// TODO make sure this saved!!!
 	_, err := os.save(ctx, masterFileName, &os.data)
 	if err != nil {
-		log.Fatalf("failed to save the updated file.")
+		// We should log here I guess.
+		return
 	}
 
 	var wg sync.WaitGroup
@@ -189,11 +189,11 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 		x := f
 		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			err := os.client.Bucket(os.bucketName).Object(x).Delete(ctx)
 			if err != nil {
 				// We don't care that much, but should still log.
 			}
-			wg.Done()
 		}()
 	}
 	wg.Wait()
