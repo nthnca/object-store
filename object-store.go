@@ -1,5 +1,5 @@
-// Package objectstore provides an objectstore that uses Google cloud storage
-// to persist the data.
+// Package objectstore provides persistent key-value storage and uses
+// Google cloud storage to persist the data.
 package objectstore
 
 import (
@@ -24,7 +24,7 @@ const (
 )
 
 // ObjectStore provides operations on the set of data in an ObjectStore. Use
-// New to get an ObjectStore.
+// New to get an ObjectStore handle.
 type ObjectStore struct {
 	// Client for accessing the storage.
 	client *storage.Client
@@ -38,12 +38,13 @@ type ObjectStore struct {
 	data  schema.ObjectSet
 	index map[string]int
 
-	// List of temporary files that can be deleted after the next full write.
+	// List of temporary files that can be deleted after the next full
+	// write.
 	files []string
 }
 
-// New will load the Media objects from the given bucket and return a ObjectStore object
-// that will allow you to continue to add Media objects to this bucket.
+// New will load the current state of the ObjectStore from the given bucket
+// and return an ObjectStore handle for performing actions.
 func New(ctx context.Context, client *storage.Client, bucketName string) (*ObjectStore, error) {
 	var os ObjectStore
 	os.client = client
@@ -97,9 +98,9 @@ func New(ctx context.Context, client *storage.Client, bucketName string) (*Objec
 	return &os, nil
 }
 
-// Insert saves a new Media object. If this objects Key is the same as an existing object it will
-// replace it if its timestamp is newer, if this new object is older it will drop it.
-func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) {
+// Insert adds or updates a value for a given key. If the key is already used
+// this new value will replace the existing value.
+func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) error {
 	var obj schema.Object
 	obj.Key = key
 	obj.TimestampNanoSeconds = time.Now().UnixNano()
@@ -112,9 +113,23 @@ func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) {
 	if err := os.save(ctx, "", &tmp); err != nil {
 		log.Fatalf("Failed to write: %v", err)
 	}
+
+	return nil
 }
 
-// addToData takes the write lock and adds this schema.Object to the data and index.
+// Delete removes a value for a given key.
+func (os *ObjectStore) Delete(ctx context.Context, key string) error {
+	os.Insert(ctx, key, nil)
+	return nil
+}
+
+// Get returns the value associated with a given key.
+func (os *ObjectStore) Get(key string) ([]byte, error) {
+	return nil, nil
+}
+
+// addToData takes the write lock and adds this schema.Object to the data and
+// index.
 func (os *ObjectStore) addToData(obj *schema.Object) {
 	os.mutex.Lock()
 	defer os.mutex.Unlock()
@@ -132,9 +147,6 @@ func (os *ObjectStore) addToData(obj *schema.Object) {
 
 /*
 // DeleteFast deletes a referenced Media object but doesn't save. To save you need to call Flush.
-func (os *ObjectStore) Delete(key [32]byte) {
-	Insert(ctx, key, nil)
-}
 
 func (os *ObjectStore) Get(key [32]byte) *[]byte {
 	os.mutex.RLock()
