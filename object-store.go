@@ -1,4 +1,4 @@
-// Package objectStore.
+// Package objectstore.
 package objectstore
 
 import (
@@ -23,11 +23,14 @@ const (
 )
 
 type objectStore struct {
+	// Client for accessing the storage.
 	client *storage.Client
 
+	// The bucket and prefix for this data.
 	bucketName string
 	filePrefix string
 
+	// RWMutex to protect data and index.
 	mutex sync.RWMutex
 	data  schema.ObjectSet
 	index map[string]int
