@@ -21,6 +21,10 @@ const (
 	masterFileName = "master.md"
 )
 
+var (
+	unixNano = time.Now().UnixNano
+)
+
 // ObjectStore provides operations on the set of data in an ObjectStore. Use
 // New to get a handle.
 type ObjectStore struct {
@@ -101,7 +105,7 @@ func internal_new(ctx context.Context, client storageClientInterface) (*ObjectSt
 
 // InsertBulk adds, updates, or deletes a group of key-values together.
 func (os *ObjectStore) InsertBulk(ctx context.Context, index map[string][]byte) error {
-	timestamp := time.Now().UnixNano()
+	timestamp := unixNano()
 	var objset schema.ObjectSet
 	for key, object := range index {
 		var obj schema.Object

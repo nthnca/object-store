@@ -135,68 +135,76 @@ type baseFunc func()
 func TestErrors(t *testing.T) {
 	mockClient := NewMockstorageClientInterface(nil)
 	mockList := NewMockstorageListInterface(nil)
+	curr := int64(1)
+	unixNano = func() int64 {
+		curr += 1
+		return curr
+	}
 
 	tests := []func(){
 		func() {
 			log.Printf("List Error")
+
 			mockClient.EXPECT().list(nil).Return(mockList)
 			mockList.EXPECT().next().Return("", fmt.Errorf("Sorry"))
 
 			_, err := internal_new(nil, mockClient)
-			if err.Error() != "Failed to iterate through objects: Sorry" {
-				log.Fatalf("Unexpected error: %v", err)
-			}
+			ErrorPrefix(err, "Failed to iterate through objects: ")
 		},
 		func() {
 			log.Printf("List Error Oops")
+
 			mockClient.EXPECT().list(nil).Return(mockList)
 			mockList.EXPECT().next().Return("abc", nil)
 			mockList.EXPECT().next().Return("", fmt.Errorf("Sorry"))
-			// mockClient.EXPECT().readFile(nil, "abc").Return([]byte("Here"), nil)
-			b := []byte{10, 16, 10, 1, 107, 16, 197, 136, 218, 213, 222, 230, 215, 174, 21, 26, 1, 97}
+			b := []byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}
 			mockClient.EXPECT().readFile(nil, "abc").Return(b, nil)
 
 			_, err := internal_new(nil, mockClient)
-			if err.Error() != "Failed to iterate through objects: Sorry" {
-				log.Fatalf("Unexpected error: %v", err)
-			}
-			// ErrorPrefix(err, "unmarshalling proto: ")
+			ErrorPrefix(err, "Failed to iterate through objects: ")
 		},
 		func() {
 			log.Printf("Read Error")
+
 			mockClient.EXPECT().list(nil).Return(mockList)
 			mockList.EXPECT().next().Return("abc", nil)
 			mockList.EXPECT().next().Return("", iterator.Done)
-			mockClient.EXPECT().readFile(nil, "abc").Return(nil, fmt.Errorf("Sorry"))
+			mockClient.EXPECT().readFile(nil, "abc").
+				Return(nil, fmt.Errorf("Sorry"))
 
 			_, err := internal_new(nil, mockClient)
 			ErrorPrefix(err, "Reading file: ")
 		},
 		func() {
 			log.Printf("Read File Not Found")
+
 			mockClient.EXPECT().list(nil).Return(mockList)
 			mockList.EXPECT().next().Return("abc", nil)
 			mockList.EXPECT().next().Return("", iterator.Done)
-			mockClient.EXPECT().readFile(nil, "abc").Return(nil, storage.ErrObjectNotExist)
+			mockClient.EXPECT().readFile(nil, "abc").
+				Return(nil, storage.ErrObjectNotExist)
 
 			_, err := internal_new(nil, mockClient)
 			if err != storage.ErrObjectNotExist {
 				log.Fatalf("Unexpected error: %v", err)
 			}
 		},
-		/*
-			func() {
-				log.Printf("Success")
-				mockClient.EXPECT().list(nil).Return(mockList)
-				mockList.EXPECT().next().Return("", iterator.Done)
+		func() {
+			log.Printf("Success")
+			curr = 1
 
-				os, err := internal_new(nil, mockClient)
-				os.Insert(nil, "k", []byte("a"))
-				if err != nil {
-					log.Fatalf("Expected success: %v", err)
-				}
-			},
-		*/
+			mockClient.EXPECT().list(nil).Return(mockList)
+			mockList.EXPECT().next().Return("", iterator.Done)
+			mockClient.EXPECT().writeFile(nil,
+				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
+				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(nil)
+
+			os, err := internal_new(nil, mockClient)
+			err = os.Insert(nil, "k", []byte("a"))
+			if err != nil {
+				log.Fatalf("Expected success: %v", err)
+			}
+		},
 	}
 
 	for _, f := range tests {
@@ -209,60 +217,3 @@ func TestErrors(t *testing.T) {
 		f()
 	}
 }
-
-func TestReadInvalid(t *testing.T) {
-	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
-
-	mockClient := NewMockstorageClientInterface(mockCtrl)
-	mockList := NewMockstorageListInterface(mockCtrl)
-
-	mockClient.EXPECT().list(nil).Return(mockList)
-	mockList.EXPECT().next().Return("abc", nil)
-	mockList.EXPECT().next().Return("", iterator.Done)
-	mockClient.EXPECT().readFile(nil, "abc").Return(nil, storage.ErrObjectNotExist)
-
-	_, err := internal_new(nil, mockClient)
-	if err != storage.ErrObjectNotExist {
-		log.Fatalf("Unexpected error: %v", err)
-	}
-}
-
-/*
-func TestReadInvalidX(t *testing.T) {
-	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
-
-	mockClient := NewMockstorageClientInterface(mockCtrl)
-	mockList := NewMockstorageListInterface(mockCtrl)
-
-	mockClient.EXPECT().list(nil).Return(mockList)
-	mockList.EXPECT().next().Return("abc", nil)
-	mockList.EXPECT().next().Return("", iterator.Done)
-	mockClient.EXPECT().readFile(nil, "abc").Return([]byte("Here"), nil)
-
-	_, err := internal_new(nil, mockClient)
-	exp := "Failed to load: "
-	if err.Error()[:len(exp)] != exp {
-		log.Fatalf("Unexpected error: %v", err)
-	}
-}
-
-func TestListErrorOld(t *testing.T) {
-	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
-
-	mockClient := NewMockstorageClientInterface(mockCtrl)
-	mockList := NewMockstorageListInterface(mockCtrl)
-
-	mockClient.EXPECT().list(nil).Return(mockList)
-	// mockList.EXPECT().next().Return("abc", nil)
-	mockList.EXPECT().next().Return("", fmt.Errorf("Sorry"))
-	// mockClient.EXPECT().readFile(nil, "abc").Return([]byte("Here"), nil)
-
-	_, err := internal_new(nil, mockClient)
-	if err.Error() != "Failed to iterate through objects: Sorry" {
-		log.Fatalf("Unexpected error: %v", err)
-	}
-}
-*/
