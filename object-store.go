@@ -59,6 +59,7 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 	obj2, err := it.Next()
 	for ; err == nil; obj2, err = it.Next() {
 		obj := obj2
+
 		// We don't want to prune the masterFileName.
 		if obj.Name != os.filePrefix+masterFileName {
 			os.files = append(os.files, obj.Name)

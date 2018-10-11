@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+// Package schema provides the on disk format for
+// github.com/nthnca/object-store
 package schema;
 
 message ObjectSet {
