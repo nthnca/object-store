@@ -42,6 +42,9 @@ type ObjectStore struct {
 	files []string
 }
 
+// KeyValueOperation allows you to interact with a given key, value pair.
+type KeyValueOperation func(string, []byte)
+
 // New will load the current state of an ObjectStore from the given bucket and
 // prefix and return an ObjectStore handle for performing actions.
 func New(ctx context.Context, client *storage.Client, bucketName, filePrefix string) (*ObjectStore, error) {
@@ -106,6 +109,9 @@ func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) er
 	obj.TimestampNanoSeconds = time.Now().UnixNano()
 	obj.Object = object
 
+	os.mutex.Lock()
+	defer os.mutex.Unlock()
+
 	os.addToData(&obj)
 
 	var tmp schema.ObjectSet
@@ -120,13 +126,11 @@ func (os *ObjectStore) Insert(ctx context.Context, key string, object []byte) er
 	return nil
 }
 
-// Delete removes a value for a given key.
-func (os *ObjectStore) Delete(ctx context.Context, key string) error {
-	return os.Insert(ctx, key, nil)
-}
-
 // InsertBulk adds, updates, or deletes a group of key-values together.
 func (os *ObjectStore) InsertBulk(ctx context.Context, index map[string][]byte) error {
+	os.mutex.Lock()
+	defer os.mutex.Unlock()
+
 	return nil
 }
 
@@ -142,9 +146,6 @@ func (os *ObjectStore) Get(key string) []byte {
 	return nil
 }
 
-// KeyValueOperation allows you to interact with a given key, value pair.
-type KeyValueOperation func(string, []byte)
-
 // All performs operation op on all key, value pairs in the ObjectStore. Note
 // that all of these operations are run from inside a read lock so you
 // will not be able to perform Insert/Delete operation.
@@ -159,12 +160,14 @@ func (os *ObjectStore) ForEach(op KeyValueOperation) {
 	}
 }
 
+// Delete removes a value for a given key.
+func (os *ObjectStore) Delete(ctx context.Context, key string) error {
+	return os.Insert(ctx, key, nil)
+}
+
 // addToData takes the write lock and adds this schema.Object to the data and
 // index.
 func (os *ObjectStore) addToData(obj *schema.Object) {
-	os.mutex.Lock()
-	defer os.mutex.Unlock()
-
 	i, ok := os.index[obj.Key]
 	if ok {
 		if obj.TimestampNanoSeconds > os.data.Item[i].TimestampNanoSeconds {
@@ -181,9 +184,6 @@ func (os *ObjectStore) addToData(obj *schema.Object) {
 }
 
 func (os *ObjectStore) prune(ctx context.Context, filename string) {
-	os.mutex.Lock()
-	defer os.mutex.Unlock()
-
 	os.files = append(os.files, filename)
 	if len(os.files) < 30 {
 		return
