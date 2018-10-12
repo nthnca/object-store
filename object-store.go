@@ -126,6 +126,11 @@ func (os *ObjectStore) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// InsertBulk adds, updates, or deletes a group of key-values together.
+func (os *ObjectStore) InsertBulk(ctx context.Context, index map[string][]byte) error {
+  return nil
+}
+
 // Get returns the value associated with a given key.
 func (os *ObjectStore) Get(key string) ([]byte, error) {
 	os.mutex.Lock()
@@ -159,10 +164,12 @@ func (os *ObjectStore) addToData(obj *schema.Object) {
 			os.data.Item[i] = obj
 		}
 	} else {
-		if len(obj.Object) > 0 {
-			os.index[obj.Key] = len(os.data.Item)
-			os.data.Item = append(os.data.Item, obj)
-		}
+		// Is this optimization safe? Are you sure?
+		// if len(obj.Object) > 0 {
+		// 	return
+		// }
+		os.index[obj.Key] = len(os.data.Item)
+		os.data.Item = append(os.data.Item, obj)
 	}
 }
 
@@ -175,7 +182,6 @@ func (os *ObjectStore) prune(ctx context.Context, filename string) {
 		return
 	}
 
-	// TODO make sure this saved!!!
 	_, err := os.save(ctx, masterFileName, &os.data)
 	if err != nil {
 		// We should log here I guess.
