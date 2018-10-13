@@ -52,13 +52,11 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 
 	var wg sync.WaitGroup
 	var oops error
-	oops = nil
 	ch := make(chan *schema.ObjectSet)
 
 	it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: os.filePrefix})
-	obj2, err := it.Next()
-	for ; err == nil; obj2, err = it.Next() {
-		obj := obj2
+	obj, err := it.Next()
+	for ; err == nil; obj, err = it.Next() {
 
 		// We don't want to prune the masterFileName.
 		if obj.Name != os.filePrefix+masterFileName {
@@ -66,12 +64,13 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 		}
 
 		wg.Add(1)
+		objx := obj
 		go func() {
 			defer wg.Done()
 			var tmp schema.ObjectSet
-			errx := os.load(ctx, obj.Name, &tmp)
+			errx := os.load(ctx, objx.Name, &tmp)
 			if errx != nil {
-				oops = fmt.Errorf("Failed to load: %v (%v)", errx, obj.Name)
+				oops = fmt.Errorf("Failed to load: %v (%v)", errx, objx.Name)
 			}
 			ch <- &tmp
 		}()
