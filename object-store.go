@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	unixNano = time.Now().UnixNano
+	unixNano = func() int64 { return time.Now().UnixNano() }
 	maxFiles = 30
 )
 
