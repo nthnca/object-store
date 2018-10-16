@@ -52,21 +52,21 @@ func New(ctx context.Context, client *storage.Client, bucketName, filePrefix str
 	xcl.bucketName = bucketName
 	xcl.filePrefix = filePrefix
 
-	return internal_new(ctx, xcl)
+	return internalNew(ctx, xcl)
 }
 
-func internal_new(ctx context.Context, client storageClientInterface) (*ObjectStore, error) {
+func internalNew(ctx context.Context, client storageClientInterface) (*ObjectStore, error) {
 	var os ObjectStore
 	os.client = client
 	os.index = make(map[string]int)
 
 	var wg sync.WaitGroup
-	var load_err error
-	ch_obj := make(chan *schema.ObjectSet)
+	var loadErr error
+	chObj := make(chan *schema.ObjectSet)
 
 	it := os.client.list(ctx)
-	filename, iter_err := it.next()
-	for ; iter_err == nil && load_err == nil; filename, iter_err = it.next() {
+	filename, iterErr := it.next()
+	for ; iterErr == nil && loadErr == nil; filename, iterErr = it.next() {
 		// We don't want to prune the masterFileName.
 		if filename != masterFileName {
 			os.files = append(os.files, filename)
@@ -78,28 +78,28 @@ func internal_new(ctx context.Context, client storageClientInterface) (*ObjectSt
 			var tmp schema.ObjectSet
 			err := os.load(ctx, filename, &tmp)
 			if err != nil {
-				load_err = err
+				loadErr = err
 				return
 			}
-			ch_obj <- &tmp
+			chObj <- &tmp
 		}(filename)
 	}
 
 	go func() {
 		wg.Wait()
-		close(ch_obj)
+		close(chObj)
 	}()
 
-	for objset := range ch_obj {
+	for objset := range chObj {
 		os.addToData(objset)
 	}
 
-	if load_err != nil {
-		return nil, load_err
+	if loadErr != nil {
+		return nil, loadErr
 	}
 
-	if iter_err != iterator.Done {
-		return nil, fmt.Errorf("Failed to iterate through objects: %v", iter_err)
+	if iterErr != iterator.Done {
+		return nil, fmt.Errorf("Failed to iterate through objects: %v", iterErr)
 	}
 
 	return &os, nil
@@ -149,7 +149,7 @@ func (os *ObjectStore) Get(key string) []byte {
 	return nil
 }
 
-// All performs operation op on all key, value pairs in the ObjectStore. Note
+// ForEach performs operation op on all key, value pairs in the ObjectStore. Note
 // that all of these operations are run from inside a read lock so you
 // will not be able to perform Insert/Delete operation.
 func (os *ObjectStore) ForEach(op KeyValueOperation) {

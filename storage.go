@@ -48,10 +48,7 @@ func (this *storageClient) writeFile(ctx context.Context, filename string, conte
 	if _, err := writer.Write(contents); err != nil {
 		return err
 	}
-	if err := writer.Close(); err != nil {
-		return err
-	}
-	return nil
+	return writer.Close()
 }
 
 func (this *storageClient) deleteFile(ctx context.Context, filename string) error {
