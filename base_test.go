@@ -188,7 +188,7 @@ func TestErrors(t *testing.T) {
 
 			mockList.EXPECT().next().Return("", iterator.Done)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectSizeAndFiles(os, 0, nil)
 			ExpectErrNil(err)
 		},
@@ -201,7 +201,7 @@ func TestErrors(t *testing.T) {
 			mockList.EXPECT().next().Return("obj1", nil)
 			mockList.EXPECT().next().Return("", iterator.Done)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectSizeAndFiles(os, 1, []string{"obj1", "obj1", "obj1", "obj1"})
 			ExpectErrNil(err)
 
@@ -220,7 +220,7 @@ func TestErrors(t *testing.T) {
 			mockList.EXPECT().next().Return("", iterator.Done)
 			mockClient.EXPECT().readFile(nil, "master.md").Return(byte1, nil)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectSizeAndFiles(os, 1, []string{"obj1", "obj1", "obj1"})
 			ExpectErrNil(err)
 
@@ -234,7 +234,7 @@ func TestErrors(t *testing.T) {
 
 			mockList.EXPECT().next().Return("", fmt.Errorf("Sorry"))
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectOSNil(os)
 			ExpectErrPrefix(err, "Failed to iterate through objects: ")
 		},
@@ -244,7 +244,7 @@ func TestErrors(t *testing.T) {
 			mockList.EXPECT().next().Return("obj1", nil)
 			mockList.EXPECT().next().Return("", fmt.Errorf("Sorry"))
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectOSNil(os)
 			ExpectErrPrefix(err, "Failed to iterate through objects: ")
 		},
@@ -256,7 +256,7 @@ func TestErrors(t *testing.T) {
 			mockClient.EXPECT().readFile(nil, "abc").
 				Return([]byte("not a proto"), nil)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectOSNil(os)
 			ExpectErrPrefix(err, "unmarshalling proto: ")
 		},
@@ -268,7 +268,7 @@ func TestErrors(t *testing.T) {
 			mockClient.EXPECT().readFile(nil, "abc").
 				Return(nil, fmt.Errorf("Sorry"))
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectOSNil(os)
 			ExpectErrPrefix(err, "Reading file: ")
 		},
@@ -280,7 +280,7 @@ func TestErrors(t *testing.T) {
 			mockClient.EXPECT().readFile(nil, "abc").
 				Return(nil, fmt.Errorf("Sorry"))
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectOSNil(os)
 			ExpectErrPrefix(err, "Reading file: ")
 		},
@@ -292,7 +292,7 @@ func TestErrors(t *testing.T) {
 			mockClient.EXPECT().readFile(nil, "abc").
 				Return(nil, storage.ErrObjectNotExist)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			ExpectOSNil(os)
 			if err != storage.ErrObjectNotExist {
 				log.Fatalf("Unexpected error: %v", err)
@@ -306,7 +306,7 @@ func TestErrors(t *testing.T) {
 				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
 				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(fmt.Errorf("Sorry"))
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			err = os.Insert(nil, "k", []byte("a"))
 			ExpectErrPrefix(err, "Failed to write: ")
 		},
@@ -318,7 +318,7 @@ func TestErrors(t *testing.T) {
 				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
 				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(nil)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			err = os.Insert(nil, "k", []byte("a"))
 			if err != nil {
 				log.Fatalf("Expected success: %v", err)
@@ -332,7 +332,7 @@ func TestErrors(t *testing.T) {
 				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
 				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(nil)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			err = os.Insert(nil, "k", []byte("a"))
 			if err != nil {
 				log.Fatalf("Expected success: %v", err)
@@ -350,7 +350,7 @@ func TestErrors(t *testing.T) {
 				"3a08adf873974f4578dfc4be2d1ac4cc04b6e9e7db78aa8761c309189c35c721.os",
 				[]byte{10, 8, 10, 1, 107, 16, 2, 26, 1, 97}).Return(nil)
 
-			os, err := internal_new(nil, mockClient)
+			os, err := internalNew(nil, mockClient)
 			err = os.Insert(nil, "k", []byte("a"))
 			if err != nil {
 				log.Fatalf("Expected success: %v", err)
